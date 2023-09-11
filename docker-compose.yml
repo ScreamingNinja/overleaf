@@ -1,0 +1,97 @@
+# https://github.com/overleaf/overleaf/blob/main/docker-compose.yml
+
+services:
+    sharelatex:
+        image: sharelatex/sharelatex:4
+        container_name: overleaf
+        restart: unless-stopped
+        stop_grace_period: 60s
+        volumes:
+            - overleaf4-data:/var/lib/sharelatex
+            - /etc/localtime:/etc/localtime:ro
+        networks:
+            - traefik
+            - overleaf
+        env_file:
+            - stack.env
+        environment:
+            SHARELATEX_MONGO_URL: mongodb://mongo/sharelatex?replicaSet=overleaf
+            SHARELATEX_REDIS_HOST: redis
+            REDIS_HOST: redis
+        expose:
+            - 80
+            - 80/udp
+        labels:
+            traefik.enable: true
+            traefik.http.routers.SERVICE.entrypoints: https
+            traefik.http.routers.SERVICE.rule: Host(`${HOST}`)
+        depends_on:
+            mongo:
+                condition: service_healthy
+            redis:
+                condition: service_started
+        security_opt:
+          - no-new-privileges:true
+
+    mongo:
+        image: mongo:7
+        container_name: overleaf-mongo
+        command: "--replSet overleaf"
+        restart: unless-stopped
+        volumes:
+            - overleaf4-mongodb:/data/db
+        networks:
+            - overleaf
+        expose:
+            - 27017
+        security_opt:
+          - no-new-privileges:true
+        healthcheck:
+            test: |
+                mongosh --quiet --eval 'rs.hello().setName ? rs.hello().setName : rs.initiate({_id:"overleaf",members:[{_id: 0,host:"mongo:27017"}]})'
+            start_period: 10s
+            start_interval: 3s
+            interval: 19s # TODO: increase this once start_interval is fixed
+            timeout: 3s
+            retries: 2
+
+    redis:
+        image: redis:latest
+        container_name: overleaf-redis
+        restart: unless-stopped
+        volumes:
+            - overleaf4-redis:/data
+        networks:
+            - overleaf
+        expose:
+            - 6379
+        security_opt:
+            - no-new-privileges:true
+
+    tunnel:
+        container_name: overleaf-cloudflared-tunnel
+        image: cloudflare/cloudflared
+        restart: unless-stopped
+        command: tunnel run
+        networks:
+            - overleaf
+        environment:
+            TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+        depends_on:
+            sharelatex:
+                condition: service_started
+        security_opt:
+            - no-new-privileges:true
+
+networks:
+    overleaf:
+    traefik:
+        external: true
+
+volumes:
+    overleaf4-data:
+        external: true
+    overleaf4-redis:
+        external: true
+    overleaf4-mongodb:
+        external: true
